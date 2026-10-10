@@ -3,7 +3,7 @@ name: Backtest
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 1 * * 1"  # tiap Senin 08:17 WIB
+    - cron: "17 1 * * 0"  # tiap Minggu 08:17 WIB
 
 permissions:
   contents: write

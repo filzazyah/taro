@@ -31,7 +31,7 @@ Menguji beberapa strategi sederhana pada data historis:
 - Strategi: beli & tahan (pembanding), trend SMA20/50, mean reversion RSI(2), day trade momentum 1 jam pertama.
 - Target "sangat bagus": untung 30–50%/tahun dengan rugi terdalam tidak lebih dari 25%.
 
-Laporan dibuat otomatis oleh GitHub Actions (tab **Actions → Backtest → Run workflow**, juga tiap Senin)
+Laporan dibuat otomatis oleh GitHub Actions (tab **Actions → Backtest → Run workflow**, juga tiap Minggu)
 dan disimpan di `trading/report.html`, bisa dibuka di `https://filzazyah.github.io/taro/trading/report.html`.
 
 Jalankan lokal:
