@@ -25,6 +25,14 @@
   .bad { color:var(--bad); font-weight:600; }
   .good { color:var(--good); font-weight:600; }
   ul { padding-left:20px; margin:8px 0 0; }
+  .breach { border:1px solid var(--line); border-radius:8px; margin-top:8px; }
+  .breach summary { display:flex; align-items:center; gap:10px; padding:10px 12px; cursor:pointer; }
+  .breach summary input { width:20px; height:20px; flex:none; }
+  .bname { font-weight:600; flex:1; }
+  .year { color:var(--muted); font-size:.875rem; }
+  .breach.done .bname { text-decoration:line-through; color:var(--muted); }
+  .bbody { padding:0 12px 12px; font-size:.925rem; }
+  .bbody > div { margin-bottom:4px; }
   footer { color:var(--muted); font-size:.8rem; }
 </style>
 </head>
@@ -71,22 +79,99 @@ async function withButton(form, fn) {
   try { await fn(); } finally { btn.disabled = false; }
 }
 
+const RISK = {
+  plaintext: 'Password tersimpan tanpa enkripsi — pasti bisa dibaca',
+  easytocrack: 'Password mudah dibongkar',
+  hardtocrack: 'Password terenkripsi kuat',
+  unknown: 'Status password tidak diketahui',
+};
+
+function loadDone(email) {
+  try { return JSON.parse(localStorage.getItem('done:' + email) || '{}'); } catch { return {}; }
+}
+function saveDone(email, done) {
+  try { localStorage.setItem('done:' + email, JSON.stringify(done)); } catch {}
+}
+
+function advice(b) {
+  const data = (b.data || '').toLowerCase();
+  const tips = [];
+  if (data.includes('password')) tips.push('Ganti password di ' + b.name + ' dan di semua akun yang memakai password sama.');
+  if (data.includes('phone')) tips.push('Waspadai SMS/WA penipuan yang mengaku dari ' + b.name + '.');
+  if (data.includes('address')) tips.push('Alamatmu ikut bocor; waspadai paket/kurir palsu.');
+  tips.push('Aktifkan 2FA jika tersedia, atau hapus akun jika sudah tidak dipakai.');
+  return tips;
+}
+
+async function fetchBreaches(email) {
+  // Detailed endpoint first; fall back to names-only.
+  try {
+    const res = await fetch('https://api.xposedornot.com/v1/breach-analytics?email=' + encodeURIComponent(email));
+    if (res.ok) {
+      const data = await res.json();
+      const list = data?.ExposedBreaches?.breaches_details;
+      if (Array.isArray(list)) {
+        return list.map(b => ({
+          name: b.breach, year: b.xposed_date, data: b.xposed_data, records: b.xposed_records,
+          risk: b.password_risk, domain: b.domain, details: b.details,
+        }));
+      }
+      if (data && !data.ExposedBreaches) return [];
+    }
+  } catch {}
+  const res = await fetch('https://api.xposedornot.com/v1/check-email/' + encodeURIComponent(email));
+  if (res.status === 404) return [];
+  if (res.status === 429) throw new Error('terlalu banyak permintaan, coba lagi sebentar lagi');
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  return (data.breaches || []).flat().map(name => ({ name }));
+}
+
+function renderBreaches(out, email, list) {
+  if (!list.length) { show(out, '<span class="good">Tidak ditemukan di kebocoran yang tercatat.</span>'); return; }
+  list.sort((a, b) => (parseInt(b.year) || 0) - (parseInt(a.year) || 0));
+  const done = loadDone(email);
+  const progress = () => {
+    const n = list.filter(b => done[b.name]).length;
+    return `<b>${n} dari ${list.length}</b> sudah diamankan`;
+  };
+  show(out, `<span class="bad">Ditemukan di ${list.length} kebocoran.</span>
+    <p class="note" style="margin:8px 0">Centang setelah kamu ganti password / amankan akunnya. <span id="progress">${progress()}</span></p>
+    <div class="breaches">` + list.map((b, i) => `
+      <details class="breach${done[b.name] ? ' done' : ''}">
+        <summary>
+          <input type="checkbox" data-i="${i}" ${done[b.name] ? 'checked' : ''} aria-label="Sudah diamankan">
+          <span class="bname">${esc(b.name)}</span>${b.year ? `<span class="year">${esc(b.year)}</span>` : ''}
+        </summary>
+        <div class="bbody">
+          ${b.domain ? `<div><b>Situs:</b> ${esc(b.domain)}</div>` : ''}
+          ${b.data ? `<div><b>Data bocor:</b> ${esc(b.data.split(';').filter(Boolean).join(', '))}</div>` : ''}
+          ${b.risk ? `<div><b>Password:</b> ${esc(RISK[b.risk] || b.risk)}</div>` : ''}
+          ${b.records ? `<div><b>Jumlah data:</b> ${Number(b.records).toLocaleString('id-ID')}</div>` : ''}
+          ${b.details ? `<p class="note">${esc(b.details)}</p>` : ''}
+          <b>Yang perlu dilakukan:</b><ul>${advice(b).map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+        </div>
+      </details>`).join('') + '</div>');
+  out.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('click', ev => ev.stopPropagation());
+    cb.addEventListener('change', () => {
+      const b = list[cb.dataset.i];
+      if (cb.checked) done[b.name] = true; else delete done[b.name];
+      saveDone(email, done);
+      cb.closest('details').classList.toggle('done', cb.checked);
+      $('progress').innerHTML = progress();
+    });
+  });
+}
+
 $('emailForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const out = $('emailResult');
-  const email = $('email').value.trim();
+  const email = $('email').value.trim().toLowerCase();
   withButton(e.target, async () => {
     show(out, 'Mengecek...');
     try {
-      const res = await fetch('https://api.xposedornot.com/v1/check-email/' + encodeURIComponent(email));
-      if (res.status === 404) { show(out, '<span class="good">Tidak ditemukan di kebocoran yang tercatat.</span>'); return; }
-      if (res.status === 429) { show(out, 'Terlalu banyak permintaan. Coba lagi sebentar lagi.'); return; }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      const names = (data.breaches || []).flat();
-      if (!names.length) { show(out, '<span class="good">Tidak ditemukan di kebocoran yang tercatat.</span>'); return; }
-      show(out, `<span class="bad">Ditemukan di ${names.length} kebocoran:</span><ul>` +
-        names.map(n => `<li>${esc(n)}</li>`).join('') + '</ul>');
+      renderBreaches(out, email, await fetchBreaches(email));
     } catch (err) {
       show(out, 'Gagal menghubungi layanan (' + esc(err.message) + '). Alternatif: buka <a href="https://haveibeenpwned.com" target="_blank" rel="noopener">haveibeenpwned.com</a>.');
     }
