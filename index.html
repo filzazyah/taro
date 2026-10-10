@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cek Kebocoran</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#5b6470; --line:#d9dde3; --accent:#2457d6; --bad:#c62828; --good:#2e7d32; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171b; --card:#1d2127; --fg:#e8eaed; --muted:#9aa3ad; --line:#323840; --accent:#7aa2ff; --bad:#ff6b6b; --good:#6fcf73; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; }
+  h2 { font-size:1.1rem; margin:0 0 4px; }
+  .note { color:var(--muted); font-size:.875rem; margin:0 0 12px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; }
+  input { flex:1 1 220px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .result { margin-top:14px; }
+  .bad { color:var(--bad); font-weight:600; }
+  .good { color:var(--good); font-weight:600; }
+  ul { padding-left:20px; margin:8px 0 0; }
+  footer { color:var(--muted); font-size:.8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cek Kebocoran Akun</h1>
+  <p class="sub">Gratis, tanpa API key. Semua dijalankan langsung di browser-mu.</p>
+
+  <section>
+    <h2>1. Akun mana yang pernah bocor?</h2>
+    <p class="note">Email dikirim ke XposedOrNot (layanan gratis). Cek email milikmu sendiri saja.</p>
+    <form id="emailForm">
+      <input id="email" type="email" placeholder="nama@email.com" required autocomplete="email">
+      <button type="submit">Cek email</button>
+    </form>
+    <div id="emailResult" class="result" aria-live="polite"></div>
+  </section>
+
+  <section>
+    <h2>2. Apakah password ini pernah bocor?</h2>
+    <p class="note">Password <b>tidak</b> dikirim. Browser hanya mengirim 5 karakter awal hash SHA-1 ke Pwned Passwords (k-anonymity).</p>
+    <form id="pwForm">
+      <input id="pw" type="password" placeholder="Password" required autocomplete="off">
+      <button type="submit">Cek password</button>
+    </form>
+    <div id="pwResult" class="result" aria-live="polite"></div>
+  </section>
+
+  <footer>
+    "Tidak ditemukan" bukan jaminan aman: kebocoran yang belum dipublikasikan tidak tercatat.
+    Jika ada yang bocor, ganti password di situs itu dan di situs lain yang memakai password sama, lalu aktifkan 2FA.
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function show(el, html) { el.innerHTML = html; }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function withButton(form, fn) {
+  const btn = form.querySelector('button');
+  btn.disabled = true;
+  try { await fn(); } finally { btn.disabled = false; }
+}
+
+$('emailForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const out = $('emailResult');
+  const email = $('email').value.trim();
+  withButton(e.target, async () => {
+    show(out, 'Mengecek...');
+    try {
+      const res = await fetch('https://api.xposedornot.com/v1/check-email/' + encodeURIComponent(email));
+      if (res.status === 404) { show(out, '<span class="good">Tidak ditemukan di kebocoran yang tercatat.</span>'); return; }
+      if (res.status === 429) { show(out, 'Terlalu banyak permintaan. Coba lagi sebentar lagi.'); return; }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const names = (data.breaches || []).flat();
+      if (!names.length) { show(out, '<span class="good">Tidak ditemukan di kebocoran yang tercatat.</span>'); return; }
+      show(out, `<span class="bad">Ditemukan di ${names.length} kebocoran:</span><ul>` +
+        names.map(n => `<li>${esc(n)}</li>`).join('') + '</ul>');
+    } catch (err) {
+      show(out, 'Gagal menghubungi layanan (' + esc(err.message) + '). Alternatif: buka <a href="https://haveibeenpwned.com" target="_blank" rel="noopener">haveibeenpwned.com</a>.');
+    }
+  });
+});
+
+async function sha1Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+$('pwForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const out = $('pwResult');
+  const pw = $('pw').value;
+  withButton(e.target, async () => {
+    show(out, 'Mengecek...');
+    try {
+      const hash = await sha1Hex(pw);
+      const prefix = hash.slice(0, 5), suffix = hash.slice(5);
+      const res = await fetch('https://api.pwnedpasswords.com/range/' + prefix, { headers: { 'Add-Padding': 'true' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const line = (await res.text()).split('\n').find(l => l.startsWith(suffix));
+      const count = line ? parseInt(line.split(':')[1], 10) : 0;
+      show(out, count > 0
+        ? `<span class="bad">Password ini muncul ${count.toLocaleString('id-ID')} kali di kebocoran. Jangan dipakai.</span>`
+        : '<span class="good">Password ini tidak ditemukan di kebocoran yang tercatat.</span>');
+    } catch (err) {
+      show(out, 'Gagal mengecek (' + esc(err.message) + ').');
+    } finally {
+      $('pw').value = '';
+    }
+  });
+});
+</script>
+</body>
+</html>
